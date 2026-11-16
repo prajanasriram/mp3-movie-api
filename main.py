@@ -11,6 +11,7 @@ from src import (
     MovieUploadInfo,
     MovieDataResponse,
     MovieProcessingReport,
+    MovieCache,
     HealthResponse,
     ProcessConfig,
     log_requests,
@@ -33,6 +34,7 @@ app = FastAPI(title="Data Processing API", version="1.0.0")
 app.middleware("http")(log_requests)
 
 storage = MovieStorage()
+cache = MovieCache()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -95,6 +97,7 @@ async def upload_movies(file: UploadFile = File(...)):
     df = df[MOVIE_COLUMNS]
 
     storage.save(df)
+    cache.invalidate()
 
     logger.info(
         f"Uploaded movies: filename={file.filename}, "
@@ -111,6 +114,12 @@ async def upload_movies(file: UploadFile = File(...)):
 
 @app.get("/movies", response_model=MovieDataResponse)
 def get_movies(limit: int = Query(default=100, ge=1)):
+    cached_response = cache.get(limit)
+
+    if cached_response is not None:
+        logger.info(f"Cache hit: limit={limit}")
+        return cached_response
+
     records = storage.select_columns(
         MOVIE_COLUMNS,
         limit
@@ -122,6 +131,8 @@ def get_movies(limit: int = Query(default=100, ge=1)):
         "data": records,
         "total_rows": total_rows
     }
+
+    cache.set(limit, response)
 
     logger.info(
         f"Retrieved movies: returned_rows={len(records)}"
@@ -217,6 +228,7 @@ def process_movies(config: ProcessConfig):
         ) from error
 
     storage.save(processed_df)
+    cache.invalidate()
 
     logger.info(
         f"Processed movies: "
